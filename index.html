@@ -175,7 +175,7 @@
     </style>
 </head>
 <body class="flex justify-center items-start min-h-screen p-0 sm:p-4">
-    <div class="w-full max-w-md theme-bg-app min-h-screen sm:min-h-[880px] sm:rounded-3xl shadow-2xl overflow-hidden relative flex flex-col justify-between border border-violet-900/30">
+    <div class="w-full max-w-md theme-bg-app min-h-screen sm:min-h-[880px] sm:rounded-3xl shadow-2xl overflow-hidden relative flex flex-col justify-between border border-violet-900/35">
 
         <!-- Header -->
         <header class="theme-header p-4 shadow-2xl sticky top-0 z-30">
@@ -520,6 +520,173 @@
         </div>
 
     </div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'rk-real-estates-prod';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyDummyKeyForPWA12345",
+            authDomain: "rk-real-estates.firebaseapp.com",
+            projectId: "rk-real-estates"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        let currentUser = null;
+        window.firebaseReady = false;
+
+        async function initFirebase() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                currentUser = auth.currentUser;
+                window.firebaseReady = true;
+                console.log("Firebase Connected Successfully. UID:", currentUser?.uid);
+                startCloudSync();
+            } catch (err) {
+                console.error("Firebase Auth Error:", err);
+                // Fallback to local storage if offline
+                window.firebaseReady = false;
+            }
+        }
+
+        initFirebase();
+
+        // Real-Time Cloud Listeners for Sync across all users & phones
+        function startCloudSync() {
+            if (!window.firebaseReady) return;
+
+            // 1. Sync Properties Live
+            const propCol = collection(db, 'artifacts', appId, 'public', 'data', 'properties');
+            onSnapshot(propCol, (snapshot) => {
+                const cloudProps = [];
+                snapshot.forEach(docSnap => {
+                    cloudProps.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                if (cloudProps.length > 0) {
+                    properties = cloudProps;
+                    localStorage.setItem('rk_properties', JSON.stringify(properties));
+                    renderContent();
+                }
+            }, (err) => console.error("Prop sync error:", err));
+
+            // 2. Sync Leads Live (Notifies Admin instantly when any friend/client submits)
+            const leadsCol = collection(db, 'artifacts', appId, 'public', 'data', 'interested_leads');
+            onSnapshot(leadsCol, (snapshot) => {
+                const cloudLeads = [];
+                snapshot.forEach(docSnap => {
+                    cloudLeads.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                if (cloudLeads.length > 0) {
+                    interestedLeads = cloudLeads;
+                    localStorage.setItem('rk_interested_leads', JSON.stringify(interestedLeads));
+                    updateLeadsBadge();
+                    if (isAdminMode && currentTab === 'leads') {
+                        renderLeads();
+                    }
+                }
+            }, (err) => console.error("Leads sync error:", err));
+
+            // 3. Sync Sell Submissions Live
+            const sellCol = collection(db, 'artifacts', appId, 'public', 'data', 'sell_submissions');
+            onSnapshot(sellCol, (snapshot) => {
+                const cloudSells = [];
+                snapshot.forEach(docSnap => {
+                    cloudSells.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                if (cloudSells.length > 0) {
+                    sellSubmissions = cloudSells;
+                    localStorage.setItem('rk_sell_submissions', JSON.stringify(sellSubmissions));
+                    updateLeadsBadge();
+                    if (isAdminMode && currentTab === 'leads') {
+                        renderLeads();
+                    }
+                }
+            }, (err) => console.error("Sell sync error:", err));
+
+            // 4. Sync CRM Customers Live
+            const custCol = collection(db, 'artifacts', appId, 'public', 'data', 'customers');
+            onSnapshot(custCol, (snapshot) => {
+                const cloudCusts = [];
+                snapshot.forEach(docSnap => {
+                    cloudCusts.push({ id: docSnap.id, ...docSnap.data() });
+                });
+                if (cloudCusts.length > 0) {
+                    customers = cloudCusts;
+                    localStorage.setItem('rk_customers', JSON.stringify(customers));
+                    if (isAdminMode && currentTab === 'customers') {
+                        renderCustomers();
+                    }
+                }
+            }, (err) => console.error("Cust sync error:", err));
+        }
+
+        // Expose Cloud Helpers to Global Scope
+        window.cloudSaveProperty = async function(prop) {
+            if (window.firebaseReady) {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'properties', String(prop.id));
+                await setDoc(docRef, prop);
+            }
+        };
+
+        window.cloudDeleteProperty = async function(propId) {
+            if (window.firebaseReady) {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'properties', String(propId));
+                await deleteDoc(docRef);
+            }
+        };
+
+        window.cloudAddLead = async function(lead) {
+            if (window.firebaseReady) {
+                const leadsCol = collection(db, 'artifacts', appId, 'public', 'data', 'interested_leads');
+                await addDoc(leadsCol, lead);
+            }
+        };
+
+        window.cloudDeleteLead = async function(leadId) {
+            if (window.firebaseReady) {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'interested_leads', String(leadId));
+                await deleteDoc(docRef);
+            }
+        };
+
+        window.cloudAddSell = async function(sub) {
+            if (window.firebaseReady) {
+                const sellCol = collection(db, 'artifacts', appId, 'public', 'data', 'sell_submissions');
+                await addDoc(sellCol, sub);
+            }
+        };
+
+        window.cloudDeleteSell = async function(subId) {
+            if (window.firebaseReady) {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'sell_submissions', String(subId));
+                await deleteDoc(docRef);
+            }
+        };
+
+        window.cloudSaveCustomer = async function(cust) {
+            if (window.firebaseReady) {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'customers', String(cust.id));
+                await setDoc(docRef, cust);
+            }
+        };
+
+        window.cloudDeleteCustomer = async function(custId) {
+            if (window.firebaseReady) {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'customers', String(custId));
+                await deleteDoc(docRef);
+            }
+        };
+    </script>
 
     <script>
         let currentTab = 'dashboard';
@@ -1162,7 +1329,7 @@
             `;
         }
 
-        function handleSellSubmit(e) {
+        async function handleSellSubmit(e) {
             e.preventDefault();
             const fd = new FormData(e.target);
             const sellerName = fd.get('sellerName');
@@ -1173,7 +1340,7 @@
             const sellerNotes = fd.get('sellerNotes');
             const fileInput = document.getElementById('sell-photos-input');
 
-            const finalizeSellSubmission = (uploadedImageUrls) => {
+            const finalizeSellSubmission = async (uploadedImageUrls) => {
                 const newSub = {
                     id: Date.now(),
                     sellerName,
@@ -1189,6 +1356,9 @@
 
                 sellSubmissions.unshift(newSub);
                 saveData();
+                if (window.cloudAddSell) {
+                    await window.cloudAddSell(newSub);
+                }
                 updateLeadsBadge();
 
                 showNotification("🎉 Property submitted! Sent to Rajkumar's Admin portal for verification & approval.");
@@ -1418,7 +1588,7 @@
             }
         }
 
-        function submitClientLead() {
+        async function submitClientLead() {
             const phoneInput = document.getElementById('client-lead-phone');
             const phone = phoneInput.value.trim();
             if (!phone || phone.length < 10) {
@@ -1428,10 +1598,10 @@
             clientMobileNumber = phone;
             localStorage.setItem('rk_client_mobile', phone);
             closeModal('modal-client-lead');
-            recordClientLeadAndOpen(currentViewingPropId, phone);
+            await recordClientLeadAndOpen(currentViewingPropId, phone);
         }
 
-        function recordClientLeadAndOpen(propId, phone) {
+        async function recordClientLeadAndOpen(propId, phone) {
             const p = properties.find(prop => prop.id == propId);
             const propTitle = p ? p.title : 'Property #' + propId;
             
@@ -1447,6 +1617,9 @@
                 };
                 interestedLeads.unshift(newLead);
                 saveData();
+                if (window.cloudAddLead) {
+                    await window.cloudAddLead(newLead);
+                }
                 updateLeadsBadge();
                 showNotification(`🔔 Admin Alert: New client inquiry from ${phone} for ${propTitle}!`);
             }
@@ -1650,7 +1823,7 @@
             `;
         }
 
-        function approveSellSubmission(subId) {
+        async function approveSellSubmission(subId) {
             const sub = sellSubmissions.find(s => s.id === subId);
             if(!sub) return;
 
@@ -1674,15 +1847,19 @@
             properties.unshift(newProp);
             sellSubmissions = sellSubmissions.filter(s => s.id !== subId);
             saveData();
+            if (window.cloudSaveProperty) await window.cloudSaveProperty(newProp);
+            if (window.cloudDeleteSell) await window.cloudDeleteSell(subId);
+
             renderLeads();
             updateLeadsBadge();
             showNotification(`✅ Property "${sub.title}" approved and listed live in the inventory!`);
         }
 
-        function rejectSellSubmission(subId) {
+        async function rejectSellSubmission(subId) {
             if(confirm('Are you sure you want to reject this sell submission?')) {
                 sellSubmissions = sellSubmissions.filter(s => s.id !== subId);
                 saveData();
+                if (window.cloudDeleteSell) await window.cloudDeleteSell(subId);
                 renderLeads();
                 updateLeadsBadge();
                 showNotification("🗑️ Sell submission rejected.");
@@ -1695,7 +1872,7 @@
             list.innerHTML = '';
 
             if(interestedLeads.length === 0) {
-                list.innerHTML = `<div class="text-center py-6 text-xs text-slate-400 bg-white rounded-2xl border p-4">No client property inquiries yet. When visitors click "Get Details", their mobile numbers will appear here instantly!</div>`;
+                list.innerHTML = `<div class="text-center py-6 text-xs text-slate-400 bg-white rounded-2xl border p-6">No client property inquiries yet. When visitors click "Get Details", their mobile numbers will appear here instantly!</div>`;
                 return;
             }
 
@@ -1714,19 +1891,20 @@
                     <div class="flex gap-2 pt-1">
                         <a href="tel:${l.phone}" class="flex-1 py-2 bg-slate-950 text-white font-bold rounded-xl text-xs text-center shadow">📞 Call Client</a>
                         <a href="https://wa.me/91${l.phone}?text=Hello,%20this%20is%20Rajkumar%20from%20RK%20Real%20Estates.%20Thanks%20for%20checking%20our%20property..." target="_blank" class="flex-1 py-2 theme-btn text-white font-bold rounded-xl text-xs text-center flex items-center justify-center gap-1 shadow"><span>💬</span> Chat WA</a>
-                        <button onclick="deleteLead(${l.id})" class="px-3 py-2 bg-red-100 text-red-700 font-bold rounded-xl text-xs">🗑️</button>
+                        <button onclick="deleteLead('${l.id}')" class="px-3 py-2 bg-red-100 text-red-700 font-bold rounded-xl text-xs">🗑️</button>
                     </div>
                 `;
                 list.appendChild(card);
             });
         }
 
-        function deleteLead(leadId) {
-            interestedLeads = interestedLeads.filter(l => l.id !== leadId);
+        async function deleteLead(leadId) {
+            interestedLeads = interestedLeads.filter(l => l.id != leadId);
             saveData();
+            if (window.cloudDeleteLead) await window.cloudDeleteLead(leadId);
             renderLeads();
             updateLeadsBadge();
-            showNotification("🗑️ Inquiry deleted.");
+            showNotification("🗑️ Inquiry deleted successfully!");
         }
 
         function getCustomersHTML() {
@@ -2177,26 +2355,28 @@
             openModal('modal-add-property');
         }
 
-        function deleteProperty(propId) {
+        async function deleteProperty(propId) {
             if(confirm('Are you sure you want to delete this property?')) {
-                properties = properties.filter(p => p.id !== propId);
+                properties = properties.filter(p => p.id != propId);
                 saveData();
+                if (window.cloudDeleteProperty) await window.cloudDeleteProperty(propId);
                 renderProperties();
                 showNotification("🗑️ Property deleted successfully!");
             }
         }
 
-        function handleAddProperty(e) {
+        async function handleAddProperty(e) {
             e.preventDefault();
             const fd = new FormData(e.target);
             const editId = fd.get('editId');
             const fileInput = document.getElementById('property-photos-input');
             const pdfInput = document.getElementById('property-pdf-input');
 
-            const processSave = (newImagesList, pdfUrlVal) => {
+            const processSave = async (newImagesList, pdfUrlVal) => {
                 const combinedImages = [...tempUploadedImages, ...newImagesList];
                 const finalPdfUrl = pdfUrlVal || tempUploadedPdf;
                 const propData = {
+                    id: editId ? Number(editId) : Date.now(),
                     title: fd.get('title'),
                     type: fd.get('type'),
                     status: fd.get('status'),
@@ -2219,15 +2399,13 @@
                     }
                     showNotification("✅ Property updated successfully!");
                 } else {
-                    const newProp = {
-                        id: Date.now(),
-                        ...propData
-                    };
-                    properties.unshift(newProp);
-                    showNotification("🎉 New property added and synced instantly across all views!");
+                    properties.unshift(propData);
+                    showNotification("🎉 New property added and synced instantly across all phones!");
                 }
 
                 saveData();
+                if (window.cloudSaveProperty) await window.cloudSaveProperty(propData);
+
                 renderProperties();
                 closeModal('modal-add-property');
                 e.target.reset();
@@ -2303,21 +2481,23 @@
             openModal('modal-add-customer');
         }
 
-        function deleteCustomer(custId) {
+        async function deleteCustomer(custId) {
             if(confirm('Are you sure you want to delete this customer lead?')) {
-                customers = customers.filter(c => c.id !== custId);
+                customers = customers.filter(c => c.id != custId);
                 saveData();
+                if (window.cloudDeleteCustomer) await window.cloudDeleteCustomer(custId);
                 renderCustomers();
                 showNotification("🗑️ Customer lead deleted successfully!");
             }
         }
 
-        function handleAddCustomer(e) {
+        async function handleAddCustomer(e) {
             e.preventDefault();
             const fd = new FormData(e.target);
             const editId = fd.get('editId');
 
             const custData = {
+                id: editId ? Number(editId) : Date.now(),
                 name: fd.get('name'),
                 phone: fd.get('phone'),
                 status: fd.get('status'),
@@ -2335,15 +2515,13 @@
                 }
                 showNotification("✅ Customer lead & alarm reminder updated!");
             } else {
-                const newCust = {
-                    id: Date.now(),
-                    ...custData
-                };
-                customers.unshift(newCust);
+                customers.unshift(custData);
                 showNotification("🎉 New customer lead & alarm reminder added!");
             }
 
             saveData();
+            if (window.cloudSaveCustomer) await window.cloudSaveCustomer(custData);
+
             renderCustomers();
             closeModal('modal-add-customer');
             e.target.reset();
